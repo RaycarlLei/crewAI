@@ -1,0 +1,57 @@
+name: Verify text URL contribution
+on:
+  workflow_dispatch:
+    inputs:
+      patch_base64:
+        description: Reviewed two-file patch encoded as base64
+        required: true
+        type: string
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      UV_PYTHON: '3.13'
+      CREWAI_DISABLE_TELEMETRY: 'true'
+      OTEL_SDK_DISABLED: 'true'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: 2c24b95eae2b0270b2513f9e24c3f4e536a22f0d
+          fetch-depth: 1
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: '0.11.3'
+          python-version: '3.13'
+          enable-cache: false
+      - name: Apply reviewed patch
+        env:
+          PATCH_BASE64: ${{ inputs.patch_base64 }}
+        run: |
+          git switch -c fix/rag-text-urls
+          printf '%s' "$PATCH_BASE64" | base64 --decode > /tmp/text-urls.patch
+          git apply --check /tmp/text-urls.patch
+          git apply /tmp/text-urls.patch
+          git diff --check
+          git diff --stat
+      - name: Install frozen workspace
+        run: uv sync --frozen --all-groups --all-extras
+      - name: Run text loader and classification tests
+        run: uv run --frozen pytest lib/crewai-tools/tests/rag/test_text_loaders.py lib/crewai-tools/tests/rag/test_data_types.py -q -n 0
+      - name: Check workspace lint and types
+        run: |
+          uv run --frozen ruff check lib/ --no-fix
+          uv run --frozen ruff format --check lib/
+          uv run --frozen mypy lib/
+      - name: Commit with repository hooks and publish branch
+        run: |
+          git config user.name RaycarlLei
+          git config user.email 38275852+RaycarlLei@users.noreply.github.com
+          uv run --frozen pre-commit install
+          git add lib/crewai-tools/src/crewai_tools/rag/loaders/text_loader.py lib/crewai-tools/tests/rag/test_text_loaders.py
+          git commit -m 'fix(rag): load text file URLs through the safe fetcher'
+          git diff --exit-code
+          git show --stat --format=fuller HEAD
+          git push origin HEAD:refs/heads/fix/rag-text-urls
